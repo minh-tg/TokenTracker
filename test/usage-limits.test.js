@@ -23,6 +23,8 @@ const {
   normalizeAntigravityQuotaSummary,
   loadAntigravityCredentials,
   readAntigravityLinuxSecretRaw,
+  ANTIGRAVITY_OAUTH_CLIENT_ID,
+  ANTIGRAVITY_OAUTH_CLIENT_SECRET,
   parseListeningPorts,
   parseWindowsListeningPorts,
   parseLinuxProcListeningPorts,
@@ -251,10 +253,12 @@ function antigravityRemoteFetchImpl({
   load = { paidTier: { name: "Google AI Pro", id: "pro" } },
   quotaStatus = 200,
   calls = [],
+  recordedRequests = [],
 } = {}) {
-  return async (url) => {
+  return async (url, options = {}) => {
     const href = String(url);
     calls.push(href);
+    if (recordedRequests) recordedRequests.push({ url: href, options });
     if (href.includes("oauth2.googleapis.com/token")) {
       return { ok: true, status: 200, async json() { return refresh; } };
     }
@@ -4451,12 +4455,14 @@ describe("fetchAntigravityLimits remote OAuth", () => {
     try {
       const credPath = writeAntigravityOauthToken(tmp, { expiry: "2026-08-01T00:00:00Z" });
       const calls = [];
+      const recordedRequests = [];
       const result = await fetchAntigravityLimits({
         platform: "linux",
         home: tmp,
         commandRunner() { return { status: 1, stdout: "" }; },
         fetchImpl: antigravityRemoteFetchImpl({
           calls,
+          recordedRequests,
           refresh: { access_token: "ya29.agy-refreshed", expires_in: 3600 },
         }),
         nowMs: Date.parse("2026-08-31T00:00:00.000Z"),
@@ -4467,6 +4473,13 @@ describe("fetchAntigravityLimits remote OAuth", () => {
       assert.ok(calls.includes("https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"));
       const saved = JSON.parse(fs.readFileSync(credPath, "utf8"));
       assert.equal(saved.token.access_token, "ya29.agy-refreshed");
+
+      const tokenReq = recordedRequests.find((r) => r.url.includes("oauth2.googleapis.com/token"));
+      assert.ok(tokenReq, "token refresh request was recorded");
+      const params = new URLSearchParams(tokenReq.options?.body);
+      assert.equal(params.get("grant_type"), "refresh_token");
+      assert.equal(params.get("client_id"), ANTIGRAVITY_OAUTH_CLIENT_ID);
+      assert.equal(params.get("client_secret"), ANTIGRAVITY_OAUTH_CLIENT_SECRET);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
