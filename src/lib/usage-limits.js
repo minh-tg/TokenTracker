@@ -3299,6 +3299,7 @@ function readAntigravityKeychainRaw({ securityRunner, timeoutMs = 2000 } = {}) {
 
 function readAntigravityLinuxSecretRaw({ secretToolRunner, timeoutMs = 2000 } = {}) {
   const runner = typeof secretToolRunner === "function" ? secretToolRunner : cp.spawnSync;
+  if (runner === cp.spawnSync && process.platform !== "linux") return null;
   try {
     const result = runner(
       "secret-tool",
@@ -3867,6 +3868,7 @@ async function fetchUsageLimitsUncached({
   env,
   platform,
   securityRunner,
+  secretToolRunner,
   fetchImpl = fetch,
   commandRunner,
   requestFn,
@@ -3976,6 +3978,7 @@ async function fetchUsageLimitsUncached({
         nowMs,
         platform,
         securityRunner,
+        secretToolRunner,
         providerTimeoutMs,
         signal,
       }),

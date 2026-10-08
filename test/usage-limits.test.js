@@ -3866,6 +3866,39 @@ describe("loadAntigravityCredentials", () => {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  it("forwards secretToolRunner through getUsageLimits", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-get-limits-"));
+    try {
+      const payload = {
+        token: {
+          access_token: "ya29.from-secret-tool",
+          refresh_token: "1//refresh-from-secret-tool",
+          expiry: "2026-08-31T01:00:00.000Z",
+        },
+      };
+      const raw = `go-keyring-base64:${Buffer.from(JSON.stringify(payload)).toString("base64")}`;
+      let secretToolCalled = false;
+      const secretToolRunner = (bin, args) => {
+        if (bin === "secret-tool") secretToolCalled = true;
+        return { status: 0, stdout: raw, stderr: "" };
+      };
+      const calls = [];
+      const result = await getUsageLimits({
+        home: tmp,
+        platform: "linux",
+        secretToolRunner,
+        securityRunner() { return { status: 1, stdout: "" }; },
+        commandRunner() { return { status: 1, stdout: "" }; },
+        fetchImpl: antigravityRemoteFetchImpl({ calls }),
+        forceRefresh: true,
+      });
+      assert.ok(secretToolCalled, "secretToolRunner was called via getUsageLimits");
+      assert.equal(result.antigravity.configured, true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Antigravity helpers", () => {
