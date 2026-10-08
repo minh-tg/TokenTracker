@@ -22,6 +22,7 @@ const {
   normalizeAntigravityResponse,
   normalizeAntigravityQuotaSummary,
   loadAntigravityCredentials,
+  readAntigravityLinuxSecretRaw,
   parseListeningPorts,
   parseWindowsListeningPorts,
   parseLinuxProcListeningPorts,
@@ -3826,6 +3827,37 @@ describe("loadAntigravityCredentials", () => {
       assert.equal(creds.path, unknownPath);
       assert.equal(creds.accessToken, "ya29.unknown-expiry");
       assert.equal(creds.expiryMs, null);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("reads Linux Secret Service via secretToolRunner", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-secret-tool-"));
+    try {
+      const payload = {
+        token: {
+          access_token: "ya29.from-secret-tool",
+          refresh_token: "1//refresh-from-secret-tool",
+          expiry: "2026-08-31T01:00:00.000Z",
+        },
+      };
+      const raw = `go-keyring-base64:${Buffer.from(JSON.stringify(payload)).toString("base64")}`;
+      let secretToolCalledWith = null;
+      const secretToolRunner = (bin, args) => {
+        secretToolCalledWith = { bin, args };
+        return { status: 0, stdout: raw, stderr: "" };
+      };
+      const creds = loadAntigravityCredentials({
+        home: tmp,
+        platform: "linux",
+        secretToolRunner,
+        nowMs: Date.parse("2026-08-31T00:00:00.000Z"),
+      });
+      assert.equal(secretToolCalledWith.bin, "secret-tool");
+      assert.deepEqual(secretToolCalledWith.args, ["lookup", "service", "gemini", "username", "antigravity"]);
+      assert.equal(creds.accessToken, "ya29.from-secret-tool");
+      assert.equal(creds.source, "keyring");
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

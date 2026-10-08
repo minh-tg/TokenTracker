@@ -3288,10 +3288,36 @@ function readAntigravityKeychainRaw({ securityRunner, timeoutMs = 2000 } = {}) {
   }
 }
 
+function readAntigravityLinuxSecretRaw({ secretToolRunner, timeoutMs = 2000 } = {}) {
+  const runner = typeof secretToolRunner === "function" ? secretToolRunner : cp.spawnSync;
+  try {
+    const result = runner(
+      "secret-tool",
+      ["lookup", "service", "gemini", "username", "antigravity"],
+      {
+        encoding: "utf8",
+        timeout: timeoutMs,
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+    if (!result || result.error || result.status !== 0) return null;
+    const stdout = typeof result.stdout === "string"
+      ? result.stdout
+      : Buffer.isBuffer(result.stdout)
+        ? result.stdout.toString("utf8")
+        : "";
+    const trimmed = stdout.trim();
+    return trimmed || null;
+  } catch {
+    return null;
+  }
+}
+
 function loadAntigravityCredentials({
   home,
   platform = process.platform,
   securityRunner,
+  secretToolRunner,
   nowMs = Date.now(),
 } = {}) {
   if (isAntigravityQuotaDisabled()) return null;
@@ -3299,6 +3325,10 @@ function loadAntigravityCredentials({
   if (platform === "darwin" || typeof securityRunner === "function") {
     const parsed = parseAntigravityCredentialPayload(readAntigravityKeychainRaw({ securityRunner }));
     if (parsed) candidates.push({ ...parsed, source: "keychain", path: null });
+  }
+  if (platform === "linux" || typeof secretToolRunner === "function") {
+    const parsed = parseAntigravityCredentialPayload(readAntigravityLinuxSecretRaw({ secretToolRunner }));
+    if (parsed) candidates.push({ ...parsed, source: "keyring", path: null });
   }
   return pickAntigravityCredentials(candidates, nowMs);
 }
@@ -3437,6 +3467,7 @@ async function fetchAntigravityRemoteLimits({
   home,
   platform = process.platform,
   securityRunner,
+  secretToolRunner,
   fetchImpl = fetch,
   nowMs = Date.now(),
   signal,
@@ -3445,7 +3476,7 @@ async function fetchAntigravityRemoteLimits({
   if (isAntigravityQuotaDisabled()) return null;
   const resolvedCreds = creds !== undefined
     ? creds
-    : loadAntigravityCredentials({ home, platform, securityRunner, nowMs });
+    : loadAntigravityCredentials({ home, platform, securityRunner, secretToolRunner, nowMs });
   if (!resolvedCreds) return null;
 
   const loadWithToken = async (accessToken) => {
@@ -3488,11 +3519,11 @@ function antigravityCredentialsNeedReauth(creds, { nowMs, remoteError } = {}) {
   );
 }
 
-function antigravityUnavailableResult({ home, nowMs, platform, securityRunner, remoteError, creds } = {}) {
+function antigravityUnavailableResult({ home, nowMs, platform, securityRunner, secretToolRunner, remoteError, creds } = {}) {
   const cached = readAntigravityLimitsCache({ home, nowMs });
   const resolvedCreds = creds !== undefined
     ? creds
-    : loadAntigravityCredentials({ home, platform, securityRunner, nowMs });
+    : loadAntigravityCredentials({ home, platform, securityRunner, secretToolRunner, nowMs });
   if (cached) {
     return antigravityCredentialsNeedReauth(resolvedCreds, { nowMs, remoteError })
       ? { ...cached, auth_action_required: "reauth" }
@@ -3535,10 +3566,11 @@ async function fetchAntigravityLimits({
   nowMs = Date.now(),
   platform = process.platform,
   securityRunner,
+  secretToolRunner,
   signal,
 } = {}) {
   if (isAntigravityQuotaDisabled()) return { configured: false, error: null };
-  const creds = loadAntigravityCredentials({ home, platform, securityRunner, nowMs });
+  const creds = loadAntigravityCredentials({ home, platform, securityRunner, secretToolRunner, nowMs });
   const startedAtMs = performance.now();
   // min(this step's ceiling, budget left after reserving the fallback guard).
   // 0 means "no time left" — the caller must skip the call, not issue it.
@@ -3583,6 +3615,7 @@ async function fetchAntigravityLimits({
           home,
           platform,
           securityRunner,
+          secretToolRunner,
           fetchImpl,
           nowMs,
           signal,
@@ -3617,6 +3650,7 @@ async function fetchAntigravityLimits({
         nowMs,
         platform,
         securityRunner,
+        secretToolRunner,
         remoteError,
         creds,
       });
@@ -3724,6 +3758,7 @@ async function fetchAntigravityLimits({
       nowMs,
       platform,
       securityRunner,
+      secretToolRunner,
       remoteError: remoteError || error,
       creds,
     });
@@ -4334,6 +4369,7 @@ module.exports = {
   normalizeAntigravityResponse,
   normalizeAntigravityQuotaSummary,
   loadAntigravityCredentials,
+  readAntigravityLinuxSecretRaw,
   parseListeningPorts,
   parseWindowsListeningPorts,
   parseLinuxProcListeningPorts,
