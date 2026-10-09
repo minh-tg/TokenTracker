@@ -15,6 +15,7 @@ const NOW = Date.parse("2026-08-31T00:00:00Z");
 const FRESH = "2026-08-31T01:00:00Z";
 const EXPIRED = "2026-08-01T00:00:00Z";
 
+/** Encode the nested agy token format using synthetic credentials. */
 function credentials(accessToken, expiry) {
   return JSON.stringify({ token: {
     access_token: accessToken,
@@ -23,18 +24,21 @@ function credentials(accessToken, expiry) {
   } });
 }
 
+/** Create an isolated home and register cleanup after the async test finishes. */
 function tempHome(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-keyring-"));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   return home;
 }
 
+/** Write a file candidate to compare against the injected keyring entry. */
 function writeFileCredentials(home, expiry) {
   const file = path.join(home, ".gemini", "jetski-standalone-oauth-token");
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, credentials("fixture-file", expiry));
 }
 
+/** Seed last-good quota with a reset later than the fixed test clock. */
 function writeCache(home) {
   const dir = path.join(home, ".tokentracker", "tracker");
   fs.mkdirSync(dir, { recursive: true });
@@ -46,11 +50,13 @@ function writeCache(home) {
   }));
 }
 
+/** Represent a process scan with no running language server. */
 function noProcess() {
   return { status: 1, stdout: "" };
 }
 
-function fakeSecretProcess(t, script) {
+/** Run a real child with fixed JavaScript source and fixture data passed as argv. */
+function fakeSecretProcess(t, script, scriptArgs = []) {
   const spawn = cp.spawn;
   let child;
   let closed;
@@ -60,7 +66,7 @@ function fakeSecretProcess(t, script) {
   t.mock.method(cp, "spawn", (bin, args, options) => {
     assert.equal(bin, "secret-tool");
     assert.deepEqual(args, ["lookup", "service", "gemini", "username", "antigravity"]);
-    child = spawn(process.execPath, ["-e", script], options);
+    child = spawn(process.execPath, ["-e", script, ...scriptArgs], options);
     closed = new Promise((resolve) => child.once("close", resolve));
     return child;
   });
@@ -70,7 +76,7 @@ function fakeSecretProcess(t, script) {
 
 test("Linux keyring discovery leaves the event loop responsive", { skip: process.platform !== "linux" }, async (t) => {
   const raw = credentials("fixture-keyring", FRESH);
-  fakeSecretProcess(t, `setTimeout(() => process.stdout.write(${JSON.stringify(raw)}), 200)`);
+  fakeSecretProcess(t, "setTimeout(() => process.stdout.write(process.argv[1]), 200)", [raw]);
   let heartbeat = false;
   const timer = setTimeout(() => { heartbeat = true; }, 10);
   t.after(() => clearTimeout(timer));
@@ -78,6 +84,12 @@ test("Linux keyring discovery leaves the event loop responsive", { skip: process
   assert.equal(typeof pending?.then, "function", "lookup must return a promise");
   assert.equal(await pending, raw);
   assert.equal(heartbeat, true, "timers must run while secret-tool is pending");
+});
+
+test("keyring fixture data containing quotes and line separators stays out of executable code", { skip: process.platform !== "linux" }, async (t) => {
+  const raw = credentials("fixture\"\\\n\u2028\u2029", FRESH);
+  fakeSecretProcess(t, "process.stdout.write(process.argv[1])", [raw]);
+  assert.equal(await readAntigravityLinuxSecretRaw(), raw);
 });
 
 test("Linux keyring timeout terminates the subprocess", { skip: process.platform !== "linux" }, async (t) => {
