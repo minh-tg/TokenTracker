@@ -247,6 +247,7 @@ function antigravityQuotaSummaryPayload() {
   };
 }
 
+/** Return fixture quota responses and optionally record the OAuth request body. */
 function antigravityRemoteFetchImpl({
   quota = antigravityQuotaSummaryPayload(),
   refresh = { access_token: "ya29.agy-refreshed", expires_in: 3600 },

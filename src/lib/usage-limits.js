@@ -3269,6 +3269,7 @@ function collectAntigravityFileCredentials({ home } = {}) {
   return candidates;
 }
 
+/** Read the agy Keychain entry synchronously; missing or unreadable entries return null. */
 function readAntigravityKeychainRaw({ securityRunner, timeoutMs = 2000 } = {}) {
   const runner = typeof securityRunner === "function" ? securityRunner : cp.spawnSync;
   if (runner === cp.spawnSync) {
@@ -3297,6 +3298,12 @@ function readAntigravityKeychainRaw({ securityRunner, timeoutMs = 2000 } = {}) {
   }
 }
 
+/**
+ * Read the agy Secret Service entry without blocking the event loop.
+ * The runner may return a result or a promise. Timeout, abort, and lookup errors
+ * return null; cancellation also terminates the default subprocess.
+ * @returns {Promise<string|null>} Raw keyring payload, before credential parsing.
+ */
 async function readAntigravityLinuxSecretRaw({ secretToolRunner, timeoutMs = 2000, signal } = {}) {
   if (typeof secretToolRunner !== "function" && process.platform !== "linux") return null;
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || signal?.aborted) return null;
@@ -3339,6 +3346,12 @@ async function readAntigravityLinuxSecretRaw({ secretToolRunner, timeoutMs = 200
   }
 }
 
+/**
+ * Select credentials from token files and the platform keyring. Prefer fresh
+ * credentials, then unknown expiry, then the most recently expired candidate.
+ * Callers must await discovery and can bound keyring reads with timeoutMs/signal.
+ * @returns {Promise<object|null>} Selected credentials and their source, or null.
+ */
 async function loadAntigravityCredentials({
   home,
   platform = process.platform,
@@ -3387,6 +3400,11 @@ function persistAntigravityCredentials(creds, next, { nowMs = Date.now() } = {})
   } catch (_error) {}
 }
 
+/**
+ * Refresh an agy token with the client credentials distributed in the app.
+ * Missing refresh tokens and rejected requests throw an AUTH_EXPIRED error.
+ * @returns {Promise<{accessToken: string, refreshToken: string, expiresIn: number}>}
+ */
 async function refreshAntigravityAccessToken(refreshToken, { fetchImpl = fetch, signal } = {}) {
   if (typeof refreshToken !== "string" || !refreshToken) {
     const err = new Error(ANTIGRAVITY_AUTH_EXPIRED_MESSAGE);
@@ -3494,6 +3512,11 @@ async function fetchAntigravityPlanLabel(fetchImpl, accessToken, signal) {
   }
 }
 
+/**
+ * Fetch Cloud Code quota with selected credentials, refreshing on expiry or 401/403.
+ * Passing creds (including null) avoids another file or keyring read.
+ * @returns {Promise<object|null>} Live quota, or null when credentials are absent.
+ */
 async function fetchAntigravityRemoteLimits({
   home,
   platform = process.platform,
@@ -3550,6 +3573,11 @@ function antigravityCredentialsNeedReauth(creds, { nowMs, remoteError } = {}) {
   );
 }
 
+/**
+ * Serve last-good quota or explain why live quota is unavailable. Mark expired
+ * credentials for reauthentication even when cached quota remains usable.
+ * The provider path passes its selected creds to avoid repeating discovery.
+ */
 async function antigravityUnavailableResult({ home, nowMs, platform, securityRunner, secretToolRunner, remoteError, creds } = {}) {
   const cached = readAntigravityLimitsCache({ home, nowMs });
   const resolvedCreds = creds !== undefined
@@ -3893,6 +3921,10 @@ async function getUsageLimits(options = {}) {
   return promise;
 }
 
+/**
+ * Fetch one aggregate for the selected providers and update its cache partition.
+ * Forward injected credential/process runners so tests can avoid host accounts.
+ */
 async function fetchUsageLimitsUncached({
   home,
   env,

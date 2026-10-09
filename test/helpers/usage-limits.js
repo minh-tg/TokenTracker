@@ -1,7 +1,9 @@
 const limits = require("../../src/lib/usage-limits");
 
-// A temporary home does not isolate the desktop keyring. Tests must opt in to
-// keyring fixtures rather than read the developer's signed-in account.
+/**
+ * A temporary home does not isolate the desktop keyring. Default to a keyring
+ * miss; individual tests can supply secretToolRunner with fixture credentials.
+ */
 function withoutHostKeyring(fn) {
   return (options = {}) => fn({
     secretToolRunner: () => ({ status: 1, stdout: "" }),
