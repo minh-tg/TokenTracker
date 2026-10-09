@@ -238,9 +238,14 @@ test("expired keyring credentials refresh once and use the renewed token for quo
   const home = tempHome(t);
   let lookups = 0;
   let refreshes = 0;
+  let writes = 0;
   const result = await fetchAntigravityLimits({
     home, platform: "linux", nowMs: NOW,
-    secretToolRunner: async () => {
+    secretToolRunner: async (_bin, args) => {
+      if (args[0] === "store") {
+        writes += 1;
+        return { status: 0, stdout: "" };
+      }
       lookups += 1;
       return { status: 0, stdout: credentials("fixture-expired", EXPIRED) };
     },
@@ -261,8 +266,9 @@ test("expired keyring credentials refresh once and use the renewed token for quo
   });
   assert.equal(result.error, null);
   assert.equal(result.primary_window.used_percent, 25);
-  assert.equal(lookups, 1);
+  assert.equal(lookups, 2, "read once for discovery and once before saving rotated tokens");
   assert.equal(refreshes, 1);
+  assert.equal(writes, 1);
 });
 
 test("keyring failure keeps a usable file token and leaves the provider signal active", async (t) => {
