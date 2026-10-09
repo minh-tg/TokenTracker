@@ -34,7 +34,7 @@ const {
   fetchAntigravityLimits,
   fetchCopilotLimits,
   describeCopilotOtelStatus,
-} = require("../src/lib/usage-limits");
+} = require("./helpers/usage-limits");
 const { writeArkCodingPlanLimitsCache } = require("../src/lib/ark-coding-plan-limits");
 
 // Match a fetch URL by host (exact or subdomain) rather than substring, so the
@@ -3651,11 +3651,11 @@ describe("normalizeAntigravityQuotaSummary", () => {
 });
 
 describe("loadAntigravityCredentials", () => {
-  it("reads jetski-standalone-oauth-token nested token objects", () => {
+  it("reads jetski-standalone-oauth-token nested token objects", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-creds-jetski-"));
     try {
       writeAntigravityOauthToken(tmp);
-      const creds = loadAntigravityCredentials({ home: tmp, platform: "linux" });
+      const creds = await loadAntigravityCredentials({ home: tmp, platform: "linux" });
       assert.equal(creds.accessToken, "ya29.agy-live");
       assert.equal(creds.refreshToken, "1//agy-refresh");
       assert.equal(creds.source, "file");
@@ -3665,7 +3665,7 @@ describe("loadAntigravityCredentials", () => {
     }
   });
 
-  it("reads antigravity-cli/antigravity-oauth-token", () => {
+  it("reads antigravity-cli/antigravity-oauth-token", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-creds-cli-"));
     try {
       const credPath = path.join(tmp, ".gemini", "antigravity-cli", "antigravity-oauth-token");
@@ -3673,7 +3673,7 @@ describe("loadAntigravityCredentials", () => {
       fs.writeFileSync(credPath, JSON.stringify({
         token: { access_token: "ya29.cli", refresh_token: "1//cli", expiry: "2099-01-01T00:00:00Z" },
       }), "utf8");
-      const creds = loadAntigravityCredentials({ home: tmp, platform: "linux" });
+      const creds = await loadAntigravityCredentials({ home: tmp, platform: "linux" });
       assert.equal(creds.accessToken, "ya29.cli");
       assert.equal(creds.source, "file");
     } finally {
@@ -3681,7 +3681,7 @@ describe("loadAntigravityCredentials", () => {
     }
   });
 
-  it("does not treat Gemini CLI oauth_creds.json as Antigravity credentials", () => {
+  it("does not treat Gemini CLI oauth_creds.json as Antigravity credentials", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-creds-gemini-"));
     try {
       const geminiDir = path.join(tmp, ".gemini");
@@ -3691,14 +3691,14 @@ describe("loadAntigravityCredentials", () => {
         JSON.stringify({ access_token: "ya29.gemini-cli", refresh_token: "1//gemini", expiry_date: Date.now() + 3_600_000 }),
         "utf8",
       );
-      const creds = loadAntigravityCredentials({ home: tmp, platform: "linux" });
+      const creds = await loadAntigravityCredentials({ home: tmp, platform: "linux" });
       assert.equal(creds, null);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
-  it("reads the macOS Keychain via securityRunner", () => {
+  it("reads the macOS Keychain via securityRunner", async () => {
     const payload = JSON.stringify({
       token: {
         access_token: "ya29.keychain",
@@ -3706,7 +3706,7 @@ describe("loadAntigravityCredentials", () => {
         expiry: "2099-01-01T00:00:00Z",
       },
     });
-    const creds = loadAntigravityCredentials({
+    const creds = await loadAntigravityCredentials({
       home: path.join(os.tmpdir(), "tokentracker-agy-no-home"),
       platform: "darwin",
       securityRunner(bin, args) {
@@ -3720,11 +3720,11 @@ describe("loadAntigravityCredentials", () => {
     assert.equal(creds.source, "keychain");
   });
 
-  it("prefers a fresh keychain token over an expired file", () => {
+  it("prefers a fresh keychain token over an expired file", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-creds-fresh-kc-"));
     try {
       writeAntigravityOauthToken(tmp, { expiry: "2020-01-01T00:00:00Z" });
-      const creds = loadAntigravityCredentials({
+      const creds = await loadAntigravityCredentials({
         home: tmp,
         platform: "darwin",
         nowMs: Date.parse("2026-08-31T00:00:00.000Z"),
@@ -3749,11 +3749,11 @@ describe("loadAntigravityCredentials", () => {
     }
   });
 
-  it("prefers a fresh file over an expired keychain token", () => {
+  it("prefers a fresh file over an expired keychain token", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-creds-fresh-file-"));
     try {
       const credPath = writeAntigravityOauthToken(tmp);
-      const creds = loadAntigravityCredentials({
+      const creds = await loadAntigravityCredentials({
         home: tmp,
         platform: "darwin",
         nowMs: Date.parse("2026-08-31T00:00:00.000Z"),
@@ -3778,7 +3778,7 @@ describe("loadAntigravityCredentials", () => {
     }
   });
 
-  it("picks the newest expired credential when every candidate is stale", () => {
+  it("picks the newest expired credential when every candidate is stale", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-creds-all-stale-"));
     try {
       writeAntigravityOauthToken(tmp, {
@@ -3794,7 +3794,7 @@ describe("loadAntigravityCredentials", () => {
           expiry: "2024-06-01T00:00:00Z",
         },
       }), "utf8");
-      const creds = loadAntigravityCredentials({
+      const creds = await loadAntigravityCredentials({
         home: tmp,
         platform: "linux",
         nowMs: Date.parse("2026-08-31T00:00:00.000Z"),
@@ -3807,7 +3807,7 @@ describe("loadAntigravityCredentials", () => {
     }
   });
 
-  it("prefers an unknown-expiry credential over expired ones", () => {
+  it("prefers an unknown-expiry credential over expired ones", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-creds-unknown-expiry-"));
     try {
       writeAntigravityOauthToken(tmp, {
@@ -3822,7 +3822,7 @@ describe("loadAntigravityCredentials", () => {
           refresh_token: "1//unknown-expiry",
         },
       }), "utf8");
-      const creds = loadAntigravityCredentials({
+      const creds = await loadAntigravityCredentials({
         home: tmp,
         platform: "linux",
         nowMs: Date.parse("2026-08-31T00:00:00.000Z"),
@@ -3836,7 +3836,7 @@ describe("loadAntigravityCredentials", () => {
     }
   });
 
-  it("reads Linux Secret Service via secretToolRunner", () => {
+  it("reads Linux Secret Service via secretToolRunner", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tokentracker-agy-secret-tool-"));
     try {
       const payload = {
@@ -3852,7 +3852,7 @@ describe("loadAntigravityCredentials", () => {
         secretToolCalledWith = { bin, args };
         return { status: 0, stdout: raw, stderr: "" };
       };
-      const creds = loadAntigravityCredentials({
+      const creds = await loadAntigravityCredentials({
         home: tmp,
         platform: "linux",
         secretToolRunner,
@@ -4821,6 +4821,7 @@ describe("TOKENTRACKER_DISABLE_ANTIGRAVITY_QUOTA opt-out", () => {
         platform: "linux",
         home: tmp,
         commandRunner() { throw new Error("must not scan processes"); },
+        secretToolRunner() { throw new Error("must not read the keyring"); },
         fetchImpl: antigravityRemoteFetchImpl({ calls }),
         nowMs: Date.parse("2026-08-31T00:00:00.000Z"),
       });

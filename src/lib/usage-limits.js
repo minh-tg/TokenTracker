@@ -3297,47 +3297,67 @@ function readAntigravityKeychainRaw({ securityRunner, timeoutMs = 2000 } = {}) {
   }
 }
 
-function readAntigravityLinuxSecretRaw({ secretToolRunner, timeoutMs = 2000 } = {}) {
-  const runner = typeof secretToolRunner === "function" ? secretToolRunner : cp.spawnSync;
-  if (runner === cp.spawnSync && process.platform !== "linux") return null;
+async function readAntigravityLinuxSecretRaw({ secretToolRunner, timeoutMs = 2000, signal } = {}) {
+  if (typeof secretToolRunner !== "function" && process.platform !== "linux") return null;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || signal?.aborted) return null;
+
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+  let onAbort;
+  const cancelled = new Promise((resolve) => {
+    onAbort = () => resolve(null);
+    controller.signal.addEventListener("abort", onAbort, { once: true });
+  });
+  // Settle at the deadline even if an injected runner ignores cancellation or
+  // the subprocess needs extra time to exit after receiving SIGTERM.
+  const timer = setTimeout(abort, timeoutMs);
   try {
-    const result = runner(
-      "secret-tool",
-      ["lookup", "service", "gemini", "username", "antigravity"],
-      {
-        encoding: "utf8",
+    const result = await Promise.race([
+      runCommand(secretToolRunner, "secret-tool", ["lookup", "service", "gemini", "username", "antigravity"], {
         timeout: timeoutMs,
-        stdio: ["ignore", "pipe", "ignore"],
-      },
-    );
+        maxBuffer: 64 * 1024,
+        signal: controller.signal,
+        killProcessGroup: true,
+      }),
+      cancelled,
+    ]);
     if (!result || result.error || result.status !== 0) return null;
     const stdout = typeof result.stdout === "string"
       ? result.stdout
       : Buffer.isBuffer(result.stdout)
         ? result.stdout.toString("utf8")
         : "";
-    const trimmed = stdout.trim();
-    return trimmed || null;
+    return stdout.trim() || null;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+    controller.signal.removeEventListener("abort", onAbort);
+    controller.abort();
   }
 }
 
-function loadAntigravityCredentials({
+async function loadAntigravityCredentials({
   home,
   platform = process.platform,
   securityRunner,
   secretToolRunner,
   nowMs = Date.now(),
+  timeoutMs = 2000,
+  signal,
 } = {}) {
   if (isAntigravityQuotaDisabled()) return null;
   const candidates = collectAntigravityFileCredentials({ home });
-  if (platform === "darwin" || typeof securityRunner === "function") {
-    const parsed = parseAntigravityCredentialPayload(readAntigravityKeychainRaw({ securityRunner }));
+  if ((platform === "darwin" || typeof securityRunner === "function") && timeoutMs > 0 && !signal?.aborted) {
+    const parsed = parseAntigravityCredentialPayload(readAntigravityKeychainRaw({ securityRunner, timeoutMs }));
     if (parsed) candidates.push({ ...parsed, source: "keychain", path: null });
   }
   if (platform === "linux" || typeof secretToolRunner === "function") {
-    const parsed = parseAntigravityCredentialPayload(readAntigravityLinuxSecretRaw({ secretToolRunner }));
+    const parsed = parseAntigravityCredentialPayload(
+      await readAntigravityLinuxSecretRaw({ secretToolRunner, timeoutMs, signal }),
+    );
     if (parsed) candidates.push({ ...parsed, source: "keyring", path: null });
   }
   return pickAntigravityCredentials(candidates, nowMs);
@@ -3487,7 +3507,7 @@ async function fetchAntigravityRemoteLimits({
   if (isAntigravityQuotaDisabled()) return null;
   const resolvedCreds = creds !== undefined
     ? creds
-    : loadAntigravityCredentials({ home, platform, securityRunner, secretToolRunner, nowMs });
+    : await loadAntigravityCredentials({ home, platform, securityRunner, secretToolRunner, nowMs, signal });
   if (!resolvedCreds) return null;
 
   const loadWithToken = async (accessToken) => {
@@ -3530,11 +3550,11 @@ function antigravityCredentialsNeedReauth(creds, { nowMs, remoteError } = {}) {
   );
 }
 
-function antigravityUnavailableResult({ home, nowMs, platform, securityRunner, secretToolRunner, remoteError, creds } = {}) {
+async function antigravityUnavailableResult({ home, nowMs, platform, securityRunner, secretToolRunner, remoteError, creds } = {}) {
   const cached = readAntigravityLimitsCache({ home, nowMs });
   const resolvedCreds = creds !== undefined
     ? creds
-    : loadAntigravityCredentials({ home, platform, securityRunner, secretToolRunner, nowMs });
+    : await loadAntigravityCredentials({ home, platform, securityRunner, secretToolRunner, nowMs });
   if (cached) {
     return antigravityCredentialsNeedReauth(resolvedCreds, { nowMs, remoteError })
       ? { ...cached, auth_action_required: "reauth" }
@@ -3557,8 +3577,8 @@ function antigravityUnavailableResult({ home, nowMs, platform, securityRunner, s
 }
 
 /**
- * `providerTimeoutMs` bounds the WHOLE serial chain — remote quota attempt, process
- * scan, port scan, port probes and local RPCs — not any single call. Mirrors
+ * `providerTimeoutMs` bounds the WHOLE serial chain — credential discovery, remote
+ * quota attempt, process scan, port scan, port probes and local RPCs. Mirrors
  * fetchArkCodingPlanLimits / the codex remaining-budget pattern: each step's timeout is
  * clamped to what is left of the budget, and a step whose share has run out is skipped
  * rather than issued, so the chain can never outrun the outer provider race and the
@@ -3581,11 +3601,11 @@ async function fetchAntigravityLimits({
   signal,
 } = {}) {
   if (isAntigravityQuotaDisabled()) return { configured: false, error: null };
-  const creds = loadAntigravityCredentials({ home, platform, securityRunner, secretToolRunner, nowMs });
   const startedAtMs = performance.now();
   // min(this step's ceiling, budget left after reserving the fallback guard).
   // 0 means "no time left" — the caller must skip the call, not issue it.
   const budgetedTimeoutMs = (stepCeilingMs) => {
+    if (signal?.aborted) return 0;
     if (!Number.isFinite(providerTimeoutMs) || providerTimeoutMs <= 0) return stepCeilingMs;
     const guardMs = Math.min(
       ANTIGRAVITY_BUDGET_GUARD_MS,
@@ -3596,6 +3616,16 @@ async function fetchAntigravityLimits({
     if (guardedMs <= 0) return 0;
     return Math.min(stepCeilingMs, guardedMs);
   };
+
+  const creds = await loadAntigravityCredentials({
+    home,
+    platform,
+    securityRunner,
+    secretToolRunner,
+    nowMs,
+    timeoutMs: budgetedTimeoutMs(2000),
+    signal,
+  });
 
   const finalize = (payload, normalizeOptions) => {
     const result = {

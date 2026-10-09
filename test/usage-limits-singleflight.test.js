@@ -8,7 +8,7 @@ const {
   getUsageLimits,
   resetUsageLimitsCache,
   runCommand,
-} = require("../src/lib/usage-limits");
+} = require("./helpers/usage-limits");
 
 function makeCountingDeps() {
   const commandCalls = [];
